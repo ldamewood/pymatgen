@@ -410,8 +410,13 @@ class AbiStructure(Structure, AbivarAble):
             xred=xred,
             znucl=znucl_type)
 
+        acell = rprim.sum(axis=0)
+        rprim[:,0] /= acell[0]
+        rprim[:,1] /= acell[1]
+        rprim[:,2] /= acell[2]
+
         d.update(dict(
-            acell=3 * [1.0],
+            acell=acell,
             rprim=rprim))
 
         #d.update(dict(
