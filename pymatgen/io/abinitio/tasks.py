@@ -1189,6 +1189,8 @@ class Node(six.with_metaclass(abc.ABCMeta, object)):
         S_OK,
     ]
 
+    _node_id = None
+
     def __init__(self):
         # Node identifier.
         self._node_id = get_newnode_id()

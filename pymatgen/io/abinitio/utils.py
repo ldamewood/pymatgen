@@ -19,6 +19,9 @@ class File(object):
     Very simple class used to store file basenames, absolute paths and directory names.
     Provides wrappers for the most commonly used functions defined in os.path.
     """
+    
+    _path = None
+
     def __init__(self, path):
         self._path = os.path.abspath(path)
 
@@ -104,6 +107,8 @@ class Directory(object):
     Very simple class that provides helper functions
     wrapping the most commonly used functions defined in os.path.
     """
+    _path = None
+    
     def __init__(self, path):
         self._path = os.path.abspath(path)
 

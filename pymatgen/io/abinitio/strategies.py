@@ -10,6 +10,8 @@ import copy
 import six
 import numpy as np
 
+from pymatgen.core.units import ArrayWithUnit
+
 from six.moves import map, zip
 from monty.string import is_string
 from pymatgen.util.string_utils import str_aligned, str_delimited
@@ -627,7 +629,44 @@ class InputWriter(object):
         self.extra_abivars = collections.OrderedDict()
 
         for arg in args:
-            if hasattr(arg, "to_abivars"):
+            if arg.__class__.__name__ == 'Structure':
+                """Returns a dictionary with the abinit variables."""
+                types_of_specie = arg.types_of_specie
+                natom = arg.num_sites
+        
+                znucl_type = [specie.number for specie in types_of_specie]
+        
+                znucl_atoms = arg.atomic_numbers
+        
+                typat = np.zeros(natom, np.int)
+                for (atm_idx, site) in enumerate(arg):
+                    typat[atm_idx] = types_of_specie.index(site.specie) + 1
+        
+                rprim = ArrayWithUnit(arg.lattice.matrix, "ang").to("bohr")
+                xred = np.reshape([site.frac_coords for site in arg], (-1,3))
+        
+                # Set small values to zero. This usually happens when the CIF file
+                # does not give structure parameters with enough digits.
+                #rprim = np.where(np.abs(rprim) > 1e-8, rprim, 0.0)
+                #xred = np.where(np.abs(xred) > 1e-8, xred, 0.0)
+        
+                d = dict(
+                    natom=natom,
+                    ntypat=len(types_of_specie),
+                    typat=typat,
+                    xred=xred,
+                    znucl=znucl_type)
+        
+                d.update(dict(
+                    acell=3*[1.0],
+                    rprim=rprim))
+        
+                #d.update(dict(
+                #    acell=3 * [1.0],
+                #    angdeg))
+        
+                self.add_extra_abivars(d)
+            elif hasattr(arg, "to_abivars"):
                 self.add_abiobj(arg)
             else:
                 self.add_extra_abivars(arg)
