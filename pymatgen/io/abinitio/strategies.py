@@ -29,41 +29,6 @@ __maintainer__ = "Matteo Giantomassi"
 __email__ = "gmatteo at gmail.com"
 
 
-def select_pseudos(pseudos, structure, ret_table=True):
-    """
-    Given a list of pseudos and a pymatgen structure, extract the pseudopotentials
-    for the calculation (useful when we receive an entire periodic table).
-    If ret_table is True, the function will return a PseudoTable instead of
-    a list of `Pseudo` objects
-
-    Raises:
-        ValueError if no pseudo is found or multiple occurrences are found.
-    """
-    table = PseudoTable.as_table(pseudos)
-
-    pseudos = []
-    for symbol in structure.types_of_specie:
-        # Get the list of pseudopotentials in table from atom symbol.
-        pseudos_for_type = table.pseudos_with_symbol(symbol)
-
-        if not pseudos_for_type:
-            raise ValueError("Cannot find pseudo for symbol %s" % symbol)
-
-        if len(pseudos_for_type) > 1:
-            raise ValueError("Find multiple pseudos for symbol %s" % symbol)
-
-        pseudos.append(pseudos_for_type[0])
-
-    if ret_table:
-        return PseudoTable(pseudos)
-    else:
-        return pseudos
-
-
-def order_pseudos(pseudos, structure):
-    #logger.info('calling order pseudos')
-    return select_pseudos(pseudos, structure) #, ret_table=False)
-
 
 def num_valence_electrons(pseudos, structure):
     """
@@ -110,19 +75,20 @@ class AbstractStrategy(six.with_metaclass(abc.ABCMeta, object)):
     @property
     def isnc(self):
         """True if norm-conserving calculation."""
-        return self.pseudos.allnc
+        return all(p.isnc for p in self.pseudos)
 
     @property
     def ispaw(self):
         """True if PAW calculation."""
-        return self.pseudos.allpaw
+        return all(p.ispaw for p in self.pseudos)
 
     def num_valence_electrons(self):
         """Number of valence electrons computed from the pseudos and the structure."""
         return num_valence_electrons(self.pseudos, self.structure)
 
-    #@abc.abstractproperty
-    #def structure(self):
+    @abc.abstractproperty
+    def structure(self):
+        """Structure object"""
 
     #def set_structure(self, structure):
     #    self.structure = structure
@@ -151,23 +117,27 @@ class AbstractStrategy(six.with_metaclass(abc.ABCMeta, object)):
 
 class StrategyWithInput(object):
     # TODO: Find a better way to do this. I will likely need to refactor the Strategy object
-    def __init__(self, abinit_input):
+    def __init__(self, abinit_input, deepcopy=True):
+        if deepcopy: abinit_input = copy.deepcopy(abinit_input)
         self.abinit_input = abinit_input
 
     @property
     def pseudos(self):
         # FIXME: pseudos must be order but I need to define an ABC for the Strategies and Inputs.
         # Order pseudos
-        pseudos = self.abinit_input.pseudos
-        return order_pseudos(pseudos, self.abinit_input.structure)
+        return self.abinit_input.pseudos
+
+    @property
+    def structure(self):
+        return self.abinit_input.structure
 
     def add_extra_abivars(self, abivars):
         """Add variables (dict) to extra_abivars."""
-        self.abinit_input.set_variables(**abivars)
+        self.abinit_input.set_vars(**abivars)
 
     def remove_extra_abivars(self, keys):
         """Remove variables from extra_abivars."""
-        self.abinit_input.remove_variables(keys)
+        self.abinit_input.remove_vars(keys)
 
     def make_input(self):
         return str(self.abinit_input)
@@ -342,13 +312,13 @@ class ScfStrategy(HtcStrategy):
         super(ScfStrategy, self).__init__()
 
         self.set_accuracy(accuracy)
-        self.structure = structure
-        self.pseudos = select_pseudos(pseudos, structure)
+        self._structure = structure
+        if not isinstance(pseudos, collections.Iterable): pseudos = [pseudos]
+        self.pseudos = pseudos
         self.ksampling = ksampling
         self.use_symmetries = use_symmetries
 
-        self.electrons = Electrons(spin_mode=spin_mode,
-                                   smearing=smearing, algorithm=scf_algorithm,
+        self.electrons = Electrons(spin_mode=spin_mode, smearing=smearing, algorithm=scf_algorithm,
                                    nband=None, fband=None, charge=charge)
 
         self.extra_abivars = extra_abivars
@@ -356,6 +326,10 @@ class ScfStrategy(HtcStrategy):
     @property
     def runlevel(self):
         return "scf"
+
+    @property
+    def structure(self):
+        return self._structure
 
     def make_input(self):
         extra = dict(optdriver=self.optdriver, ecut=self.ecut, pawecutdg=self.pawecutdg)
@@ -407,6 +381,10 @@ class NscfStrategy(HtcStrategy):
     def runlevel(self):
         return "nscf"
 
+    @property
+    def structure(self):
+        return self.scf_strategy.structure
+
     def make_input(self):
         # Initialize the system section from structure.
         scf_strategy = self.scf_strategy
@@ -453,8 +431,7 @@ class RelaxStrategy(ScfStrategy):
         input_str = super(RelaxStrategy, self).make_input()
 
         # Add the variables for the structural relaxation.
-        input = InputWriter(self.relax_algo)
-        input_str += input.get_string()
+        input_str += InputWriter(self.relax_algo).get_string()
 
         return input_str
 
@@ -501,14 +478,18 @@ class ScreeningStrategy(HtcStrategy):
     def runlevel(self):
         return "screening"
 
+    @property
+    def structure(self):
+        return self.scf_strategy.structure
+
     def make_input(self):
         # FIXME
         extra = dict(optdriver=self.optdriver, ecut=self.ecut, ecutwfn=self.ecut, pawecutdg=self.pawecutdg)
         extra.update(self.tolerance)
         extra.update(self.extra_abivars)
 
-        inpw = InputWriter(self.scf_strategy.structure, self.electrons, self.ksampling, self.screening, **extra)
-        return inpw.get_string()
+        return InputWriter(self.scf_strategy.structure, self.electrons, self.ksampling, self.screening,
+                           **extra).get_string()
 
 
 class SelfEnergyStrategy(HtcStrategy):
@@ -554,14 +535,18 @@ class SelfEnergyStrategy(HtcStrategy):
     def runlevel(self):
         return "sigma"
 
+    @property
+    def structure(self):
+        return self.scf_strategy.structure
+
     def make_input(self):
         # FIXME
         extra = dict(optdriver=self.optdriver, ecut=self.ecut, ecutwfn=self.ecut, pawecutdg=self.pawecutdg)
         extra.update(self.tolerance)
         extra.update(self.extra_abivars)
 
-        inpw = InputWriter(self.scf_strategy.structure, self.electrons, self.ksampling, self.sigma, **extra)
-        return inpw.get_string()
+        return InputWriter(self.scf_strategy.structure, self.electrons, self.ksampling, self.sigma,
+                           **extra).get_string()
 
 
 class MdfBse_Strategy(HtcStrategy):
@@ -607,14 +592,18 @@ class MdfBse_Strategy(HtcStrategy):
     def runlevel(self):
         return "bse"
 
+    @property
+    def structure(self):
+        return self.scf_strategy.structure
+
     def make_input(self):
         # FIXME
         extra = dict(optdriver=self.optdriver, ecut=self.ecut, pawecutdg=self.pawecutdg, ecutwfn=self.ecut)
         #extra.update(self.tolerance)
         extra.update(self.extra_abivars)
 
-        inpw = InputWriter(self.scf_strategy.structure, self.electrons, self.ksampling, self.exc_ham, **extra)
-        return inpw.get_string()
+        return InputWriter(self.scf_strategy.structure, self.electrons, self.ksampling, self.exc_ham,
+                           **extra).get_string()
 
 
 class InputWriter(object):
